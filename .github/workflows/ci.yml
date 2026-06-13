@@ -10,6 +10,11 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # setup-uv@v6 still bundles a Node 20 runtime; opt its JS action into Node 24
+  # ahead of the 2026-06-16 forced cutover (and Node 20 removal in September).
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
