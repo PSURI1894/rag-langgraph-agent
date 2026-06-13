@@ -100,16 +100,24 @@ Results are written to `evals/results/` (JSON per run + a `latest.md` summary).
 ### Latest results
 
 <!-- EVAL_RESULTS_START -->
-**Retrieval** (14 questions, `k=4`, deterministic — no API key):
+14 questions, `k=4`, generation + judges on `claude-opus-4-8`:
 
 | Metric | Value |
 |---|---|
 | Retrieval hit@4 | **93%** (13/14) |
 | Retrieval MRR | **0.774** |
+| Correctness (LLM judge, 1–5) | **4.36** |
+| Faithfulness rate | **93%** (13/14) |
+| Query-rewrite rate | 0% |
 
-The single miss (`durable-execution`) is instructive: the agent retrieved the *persistence* and *checkpointers* pages — which is where the concept actually lives — but those chunks don't contain the literal phrase `"durable execution"`, so the strict substring metric flags it. That's exactly the kind of gap an eval harness exists to surface, so it's left in rather than tuned away.
+**What the harness surfaced** — the value here is in the misses, not the averages:
 
-**Generation** (LLM-as-judge): run `uv run python evals/run_evals.py` with `ANTHROPIC_API_KEY` set to populate correctness / faithfulness / rewrite-rate.
+- **It caught a hallucination.** On `streaming-modes` the agent invented two stream modes that don't exist plus a fictional "typed-projection API"; the correctness judge flagged it (scored 3). This is the single most important thing an eval suite buys you.
+- **It caught a faithfulness leak.** The one faithfulness failure (`parallel-send`) was the agent citing a specific error code (`INVALID_CONCURRENT_GRAPH_UPDATE`) that wasn't in the retrieved excerpts — a subtle, plausible-sounding ungrounded claim.
+- **Retrieval coverage, not reasoning, is the ceiling.** On `human-in-the-loop` and `parallel-send` the agent *correctly declined* to explain mechanics it couldn't retrieve (faithful, but lower correctness). The fix is better retrieval/chunking, and the metrics point straight at it.
+- The `durable-execution` retrieval miss is a metric artifact: the concept lives on the *persistence*/*checkpointers* pages (which were retrieved), but those chunks lack the literal phrase, so the strict substring check flags it.
+
+These are left in rather than tuned away — a suite that always scores 100% isn't measuring anything.
 <!-- EVAL_RESULTS_END -->
 
 ## Optional: LangSmith tracing

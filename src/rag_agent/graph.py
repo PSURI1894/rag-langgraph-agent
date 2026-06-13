@@ -111,7 +111,7 @@ def build_graph(settings: Settings | None = None, vectorstore=None):
 
     def rewrite_query(state: RAGState) -> dict:
         response = get_llm().invoke(REWRITE_PROMPT.format(question=state["question"], query=state["query"]))
-        return {"query": response.text().strip(), "rewrites": state["rewrites"] + 1}
+        return {"query": response.text.strip(), "rewrites": state["rewrites"] + 1}
 
     def generate(state: RAGState) -> dict:
         if state["documents"]:
@@ -128,7 +128,7 @@ def build_graph(settings: Settings | None = None, vectorstore=None):
             ]
         )
         sources = list(dict.fromkeys(doc.metadata.get("source", "unknown") for doc in state["documents"]))
-        return {"answer": response.text(), "sources": sources}
+        return {"answer": response.text, "sources": sources}
 
     def route_after_grading(state: RAGState) -> Literal["generate", "rewrite_query"]:
         if state["documents"] or state["rewrites"] >= settings.max_query_rewrites:
