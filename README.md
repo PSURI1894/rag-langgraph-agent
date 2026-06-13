@@ -26,6 +26,7 @@ This project deliberately covers the **entire core loop of an applied-AI / LLM-e
 - [Run with Docker](#run-with-docker)
 - [Evaluation harness](#evaluation-harness)
 - [Latest results](#latest-results)
+- [Retrieval strategies & experiments](#retrieval-strategies--experiments)
 - [Configuration](#configuration)
 - [Testing](#testing)
 - [Engineering notes](#engineering-notes)
@@ -68,7 +69,7 @@ flowchart LR
 
 | Node | What it does | Powered by |
 |---|---|---|
-| `retrieve` | Similarity search over the vector store | Chroma + local `fastembed` embeddings |
+| `retrieve` | Similarity search over the vector store (dense, or hybrid BM25+rerank — see [experiments](#retrieval-strategies--experiments)) | Chroma + local `fastembed` embeddings |
 | `grade_documents` | Returns the indices of chunks genuinely relevant to the question (structured output) | Claude |
 | `rewrite_query` *(conditional)* | Reformulates the query into precise API/concept terms, then loops back to `retrieve` | Claude |
 | `generate` | Answers using **only** the kept excerpts, cites them `[1]`,`[2]`, refuses to invent APIs | Claude |
@@ -95,6 +96,7 @@ A deliberate design choice: **ingestion and retrieval require no API key.** Only
 | LLM | **Claude `claude-opus-4-8`** via `langchain-anthropic` | Strong grading + grounded generation |
 | Embeddings | **`fastembed` / BGE-small** | Local, ONNX, **no API key, no torch download, no GPU** |
 | Vector store | **Chroma** | Zero-config local persistence |
+| Hybrid retrieval | **`rank-bm25` + fastembed cross-encoder** | Lexical recall + reranking, still key-free |
 | API | **FastAPI + Uvicorn** | Async, typed, auto OpenAPI docs |
 | Config | **pydantic-settings** | Typed config from env / `.env` |
 | Packaging | **uv** | Fast, reproducible, lockfile-backed |
@@ -147,9 +149,23 @@ curl -s localhost:8000/ask -H "content-type: application/json" \
 |---|---|---|---|
 | `GET` | `/healthz` | none | Liveness check; returns `{"status":"ok","indexed_chunks":N}` |
 | `POST` | `/ask` | needs key | Runs the agent on `{"question": "..."}` → `{answer, sources, rewrites}` |
+| `POST` | `/ask/stream` | needs key | Same input; streams the answer as Server-Sent Events |
 | `GET` | `/docs` | none | Auto-generated OpenAPI / Swagger UI |
 
 The graph is built once at startup (FastAPI `lifespan`) and reused across requests. `/healthz` works **without** an API key; `/ask` returns a clean `503` if `ANTHROPIC_API_KEY` isn't configured.
+
+**Streaming** — `/ask/stream` emits answer tokens as they're generated (filtered to the `generate` node, so internal grading/rewrite tokens never leak), then a final frame with the sources:
+
+```bash
+curl -N localhost:8000/ask/stream -H "content-type: application/json" \
+  -d '{"question": "What is a checkpointer?"}'
+```
+
+```
+data: {"token": "A checkpointer sa"}
+data: {"token": "ves a snapshot of graph state at each super-step ..."}
+data: {"done": true, "sources": ["https://docs.langchain.com/oss/langgraph/checkpointers"]}
+```
 
 ---
 
@@ -224,6 +240,32 @@ Set `LANGSMITH_TRACING=true` and `LANGSMITH_API_KEY` in `.env` to trace every gr
 
 ---
 
+## Retrieval strategies & experiments
+
+Retrieval mode is configurable (`RETRIEVAL_MODE`, `USE_RERANKER`). Rather than guess, I ran each configuration through the retrieval evals and let the numbers pick the default:
+
+| Configuration | hit@4 | MRR |
+|---|---|---|
+| **Dense — flat chunks (default)** | 93% | 0.774 |
+| Header-aware chunking (h1–h3) | 86% | 0.732 |
+| Header-aware chunking (h1–h2) | 93% | 0.714 |
+| Hybrid (BM25 + dense, RRF) | 86% | 0.685 |
+| **Hybrid + cross-encoder rerank** | **100%** | **0.839** |
+
+What the experiments showed:
+
+- **Header-aware chunking regressed** here — splitting on every heading over-fragments the docs into small, context-poor chunks — so the flat splitter is kept. (The hypothesis was reasonable; the data said no.)
+- **Naive hybrid fusion hurt** (BM25 injects lexically-similar noise), but **adding a local cross-encoder reranker lifted retrieval to 100% hit@4 / 0.839 MRR** — it even recovers the `durable-execution` miss the dense baseline couldn't rank.
+- The **default stays dense** (fast, light, no extra model download — best clone-and-run experience). Switch on the high-accuracy mode anytime:
+
+```bash
+RETRIEVAL_MODE=hybrid USE_RERANKER=true uv run python evals/run_evals.py --retrieval-only
+```
+
+The reranker is a local fastembed ONNX cross-encoder (`Xenova/ms-marco-MiniLM-L-6-v2`) — **still no API key.**
+
+---
+
 ## Configuration
 
 All settings load from environment variables or a `.env` file (see [`.env.example`](.env.example)). Defaults shown.
@@ -236,6 +278,9 @@ All settings load from environment variables or a `.env` file (see [`.env.exampl
 | `EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | Local fastembed model |
 | `RETRIEVAL_K` | `4` | Chunks retrieved per query |
 | `MAX_QUERY_REWRITES` | `1` | Retry budget for the rewrite loop |
+| `RETRIEVAL_MODE` | `dense` | `dense` or `hybrid` (BM25 + dense) |
+| `USE_RERANKER` | `false` | Cross-encoder rerank in hybrid mode |
+| `FETCH_K` | `12` | Candidates per source before fusion/rerank |
 
 ---
 
@@ -284,9 +329,11 @@ Natural next steps, in rough priority order:
 
 - [x] **CI** (GitHub Actions): runs `pytest` + the retrieval-only evals on every push.
 - [x] **Dockerfile** for one-command deployment of the API.
-- [ ] **Better chunking** (header-aware splitting) to lift the retrieval-coverage gaps the evals flagged.
-- [ ] **Streaming** `/ask` responses (Server-Sent Events) using LangGraph's `stream_mode`.
-- [ ] **Hybrid retrieval** (BM25 + dense) and reranking.
+- [x] **Chunking experiments** — evaluated header-aware splitting (regressed; flat kept). See [experiments](#retrieval-strategies--experiments).
+- [x] **Streaming** `/ask` responses (Server-Sent Events) using LangGraph's `stream_mode`.
+- [x] **Hybrid retrieval** (BM25 + dense) and reranking — reaches 100% hit@4.
+- [ ] **Multi-turn memory** via a LangGraph checkpointer + thread IDs.
+- [ ] **Evaluate generation in hybrid mode** to quantify the downstream answer-quality lift.
 
 ---
 
