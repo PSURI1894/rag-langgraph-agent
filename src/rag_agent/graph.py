@@ -70,16 +70,28 @@ def build_graph(settings: Settings | None = None, vectorstore=None):
 
         vectorstore = get_vectorstore(settings)
 
-    llm = ChatAnthropic(
-        model=settings.generation_model,
-        api_key=settings.api_key_or_none,
-        max_tokens=settings.max_answer_tokens,
-    )
-    grader = ChatAnthropic(
-        model=settings.generation_model,
-        api_key=settings.api_key_or_none,
-        max_tokens=512,
-    ).with_structured_output(RelevanceGrade)
+    # Clients are built lazily so the graph (and the FastAPI app) can compile and
+    # serve /healthz without an API key — only nodes that actually call Claude
+    # require ANTHROPIC_API_KEY, and they fail at invocation time, not build time.
+    clients: dict[str, object] = {}
+
+    def get_llm() -> ChatAnthropic:
+        if "llm" not in clients:
+            clients["llm"] = ChatAnthropic(
+                model=settings.generation_model,
+                api_key=settings.api_key_or_none,
+                max_tokens=settings.max_answer_tokens,
+            )
+        return clients["llm"]
+
+    def get_grader():
+        if "grader" not in clients:
+            clients["grader"] = ChatAnthropic(
+                model=settings.generation_model,
+                api_key=settings.api_key_or_none,
+                max_tokens=512,
+            ).with_structured_output(RelevanceGrade)
+        return clients["grader"]
 
     def retrieve(state: RAGState) -> dict:
         documents = vectorstore.similarity_search(state["query"], k=settings.retrieval_k)
@@ -91,14 +103,14 @@ def build_graph(settings: Settings | None = None, vectorstore=None):
         numbered = "\n\n".join(
             f"[{i}] {doc.page_content[:1500]}" for i, doc in enumerate(state["documents"])
         )
-        grade: RelevanceGrade = grader.invoke(
+        grade: RelevanceGrade = get_grader().invoke(
             GRADE_PROMPT.format(question=state["question"], n=len(state["documents"]), documents=numbered)
         )
         keep = [state["documents"][i] for i in grade.relevant_indices if 0 <= i < len(state["documents"])]
         return {"documents": keep}
 
     def rewrite_query(state: RAGState) -> dict:
-        response = llm.invoke(REWRITE_PROMPT.format(question=state["question"], query=state["query"]))
+        response = get_llm().invoke(REWRITE_PROMPT.format(question=state["question"], query=state["query"]))
         return {"query": response.text().strip(), "rewrites": state["rewrites"] + 1}
 
     def generate(state: RAGState) -> dict:
@@ -109,7 +121,7 @@ def build_graph(settings: Settings | None = None, vectorstore=None):
             )
         else:
             context = "(no relevant documentation excerpts were found)"
-        response = llm.invoke(
+        response = get_llm().invoke(
             [
                 ("system", GENERATE_SYSTEM_PROMPT),
                 ("user", f"Documentation excerpts:\n\n{context}\n\nQuestion: {state['question']}"),
