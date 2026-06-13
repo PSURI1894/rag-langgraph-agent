@@ -264,6 +264,15 @@ RETRIEVAL_MODE=hybrid USE_RERANKER=true uv run python evals/run_evals.py --retri
 
 The reranker is a local fastembed ONNX cross-encoder (`Xenova/ms-marco-MiniLM-L-6-v2`) — **still no API key.**
 
+**Does better retrieval produce better answers?** Yes — re-running the *generation* evals in hybrid+rerank mode lifts mean correctness from **4.36 → 4.71** (faithfulness holds at 93%):
+
+| Mode | hit@4 | MRR | Correctness | Faithfulness |
+|---|---|---|---|---|
+| Dense (default) | 93% | 0.774 | 4.36 | 93% |
+| Hybrid + rerank | **100%** | **0.839** | **4.71** | 93% |
+
+The lift comes from fixing the three coverage-limited misses — `human-in-the-loop`, `long-term-memory`, and `durable-execution` all reach 5/5 once the right chunks are retrieved and reranked. What it *doesn't* fix is the `streaming-modes` hallucination, which confirms that one is a **generation** problem (the model invents modes even with good context), not a retrieval gap.
+
 ---
 
 ## Configuration
