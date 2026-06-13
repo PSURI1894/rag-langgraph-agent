@@ -1,0 +1,22 @@
+# VCS & local env
+.git
+.gitignore
+.github
+.venv
+
+# Local data — the image rebuilds the index at build time via ingestion
+data/
+
+# Secrets — never bake into the image
+.env
+
+# Python caches
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Generated eval artifacts
+evals/results/
+
+# Docs
+README.md

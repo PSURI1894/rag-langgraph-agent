@@ -3,6 +3,7 @@
 > An **agentic RAG** system over the [LangGraph](https://docs.langchain.com/oss/langgraph) documentation — an agent that retrieves, **reasons about whether its own retrieval is any good**, retries when it isn't, answers with citations, and is measured end-to-end by a versioned evaluation harness.
 
 <p>
+  <a href="https://github.com/PSURI1894/rag-langgraph-agent/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/PSURI1894/rag-langgraph-agent/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="Python" src="https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white">
   <img alt="LangGraph" src="https://img.shields.io/badge/LangGraph-state%20machine-1C3C3C">
   <img alt="Claude" src="https://img.shields.io/badge/Claude-opus--4--8-D97757">
@@ -22,6 +23,7 @@ This project deliberately covers the **entire core loop of an applied-AI / LLM-e
 - [Tech stack](#tech-stack)
 - [Quickstart](#quickstart)
 - [API reference](#api-reference)
+- [Run with Docker](#run-with-docker)
 - [Evaluation harness](#evaluation-harness)
 - [Latest results](#latest-results)
 - [Configuration](#configuration)
@@ -151,6 +153,27 @@ The graph is built once at startup (FastAPI `lifespan`) and reused across reques
 
 ---
 
+## Run with Docker
+
+The image **bakes the vector index in at build time** (ingestion runs during the build, no API key needed), so the container serves a populated `/healthz` the moment it starts.
+
+```bash
+# Build (downloads docs + embedding model, then indexes — a few minutes)
+docker build -t rag-langgraph-agent .
+
+# Run. /healthz works with no key; pass a key to enable /ask.
+docker run --rm -p 8000:8000 \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  rag-langgraph-agent
+```
+
+```bash
+curl localhost:8000/healthz
+# {"status":"ok","indexed_chunks":1130}
+```
+
+---
+
 ## Evaluation harness
 
 Evaluation is treated as a first-class deliverable, not an afterthought. The dataset ([`evals/dataset.jsonl`](evals/dataset.jsonl)) is a **versioned** set of `question` / `reference_answer` / `must_retrieve` triples covering core LangGraph concepts. [`evals/run_evals.py`](evals/run_evals.py) scores two layers:
@@ -259,8 +282,8 @@ tests/             # offline unit tests
 
 Natural next steps, in rough priority order:
 
-- [ ] **CI** (GitHub Actions): run `pytest` + the retrieval-only evals on every push.
-- [ ] **Dockerfile** for one-command deployment of the API.
+- [x] **CI** (GitHub Actions): runs `pytest` + the retrieval-only evals on every push.
+- [x] **Dockerfile** for one-command deployment of the API.
 - [ ] **Better chunking** (header-aware splitting) to lift the retrieval-coverage gaps the evals flagged.
 - [ ] **Streaming** `/ask` responses (Server-Sent Events) using LangGraph's `stream_mode`.
 - [ ] **Hybrid retrieval** (BM25 + dense) and reranking.
