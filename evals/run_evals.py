@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 
 from rag_agent.config import get_settings
 from rag_agent.graph import answer_question, build_graph
+from rag_agent.retriever import build_retriever
 from rag_agent.vectorstore import get_vectorstore
 
 EVALS_DIR = Path(__file__).resolve().parent
@@ -105,6 +106,7 @@ def run(dataset_path: Path, limit: int | None, retrieval_only: bool) -> dict:
         items = items[:limit]
 
     vectorstore = get_vectorstore(settings)
+    retriever = build_retriever(settings, vectorstore)
     graph = None
     correctness_judge = None
     faithfulness_judge = None
@@ -113,7 +115,7 @@ def run(dataset_path: Path, limit: int | None, retrieval_only: bool) -> dict:
             sys.exit("ANTHROPIC_API_KEY is not set. Use --retrieval-only or configure the key in .env.")
         from langchain_anthropic import ChatAnthropic
 
-        graph = build_graph(settings, vectorstore=vectorstore)
+        graph = build_graph(settings, retriever=retriever)
         judge = ChatAnthropic(model=settings.judge_model, api_key=settings.api_key_or_none, max_tokens=1024)
         correctness_judge = judge.with_structured_output(CorrectnessGrade)
         faithfulness_judge = judge.with_structured_output(FaithfulnessGrade)
@@ -122,7 +124,7 @@ def run(dataset_path: Path, limit: int | None, retrieval_only: bool) -> dict:
     for item in items:
         row: dict = {"id": item["id"], "question": item["question"]}
 
-        documents = vectorstore.similarity_search(item["question"], k=settings.retrieval_k)
+        documents = retriever.search(item["question"])
         hit, rr = score_retrieval(documents, item["must_retrieve"])
         row["retrieval"] = {
             "hit": hit,
@@ -160,6 +162,8 @@ def run(dataset_path: Path, limit: int | None, retrieval_only: bool) -> dict:
         "dataset": dataset_path.name,
         "n_items": len(rows),
         "k": settings.retrieval_k,
+        "retrieval_mode": settings.retrieval_mode,
+        "reranker": settings.rerank_model if (settings.retrieval_mode == "hybrid" and settings.use_reranker) else None,
         "generation_model": None if retrieval_only else settings.generation_model,
         "retrieval": {
             "hit_rate": round(sum(r["retrieval"]["hit"] for r in rows) / len(rows), 3),

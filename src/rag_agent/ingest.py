@@ -7,8 +7,10 @@ Run with:  uv run python -m rag_agent.ingest [--force]
 """
 
 import argparse
+import os
 import re
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
@@ -26,12 +28,22 @@ FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 TITLE_RE = re.compile(r"^title:\s*[\"']?(.+?)[\"']?\s*$", re.MULTILINE)
 
 
+def _force_rmtree(path: Path) -> None:
+    """rmtree that also removes read-only files (e.g. Git pack files on Windows)."""
+
+    def on_error(func, p, _exc):
+        os.chmod(p, stat.S_IWRITE)
+        func(p)
+
+    shutil.rmtree(path, onexc=on_error)
+
+
 def fetch_docs(dest: Path, force: bool = False) -> Path:
     """Sparse-clone the docs repo so we only download the paths we index."""
     if dest.exists():
         if not force:
             return dest
-        shutil.rmtree(dest)
+        _force_rmtree(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         ["git", "clone", "--depth", "1", "--filter=blob:none", "--sparse", DOCS_REPO, str(dest)],
@@ -68,6 +80,11 @@ def load_documents(repo_dir: Path) -> list[Document]:
 
 
 def chunk_documents(documents: list[Document], chunk_size: int = 1200, chunk_overlap: int = 150) -> list[Document]:
+    """Recursively split pages into overlapping chunks, preserving page metadata.
+
+    (Markdown header-aware splitting was evaluated and regressed retrieval on this
+    corpus — see the README's retrieval experiments — so the flat splitter is kept.)
+    """
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
@@ -81,7 +98,7 @@ def build_vectorstore(chunks: list[Document], settings: Settings) -> int:
     from rag_agent.vectorstore import get_vectorstore
 
     if settings.chroma_dir.exists():
-        shutil.rmtree(settings.chroma_dir)
+        _force_rmtree(settings.chroma_dir)
     vectorstore = get_vectorstore(settings)
     batch_size = 64
     for start in range(0, len(chunks), batch_size):

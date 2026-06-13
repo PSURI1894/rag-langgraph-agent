@@ -62,13 +62,17 @@ Failed query: {query}
 Write one improved search query for the LangGraph documentation. Prefer concrete API and concept terms over conversational phrasing. Reply with the query only."""
 
 
-def build_graph(settings: Settings | None = None, vectorstore=None):
-    """Compile the RAG graph. `vectorstore` only needs a similarity_search method."""
-    settings = settings or get_settings()
-    if vectorstore is None:
-        from rag_agent.vectorstore import get_vectorstore
+def build_graph(settings: Settings | None = None, vectorstore=None, retriever=None):
+    """Compile the RAG graph.
 
-        vectorstore = get_vectorstore(settings)
+    Pass either a `retriever` (anything with `.search(query) -> list[Document]`)
+    or a `vectorstore`; if neither is given, one is built from settings.
+    """
+    settings = settings or get_settings()
+    if retriever is None:
+        from rag_agent.retriever import build_retriever
+
+        retriever = build_retriever(settings, vectorstore)
 
     # Clients are built lazily so the graph (and the FastAPI app) can compile and
     # serve /healthz without an API key — only nodes that actually call Claude
@@ -94,8 +98,7 @@ def build_graph(settings: Settings | None = None, vectorstore=None):
         return clients["grader"]
 
     def retrieve(state: RAGState) -> dict:
-        documents = vectorstore.similarity_search(state["query"], k=settings.retrieval_k)
-        return {"documents": documents}
+        return {"documents": retriever.search(state["query"])}
 
     def grade_documents(state: RAGState) -> dict:
         if not state["documents"]:

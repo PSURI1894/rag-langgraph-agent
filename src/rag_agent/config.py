@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     max_query_rewrites: int = 1
     max_answer_tokens: int = 2048
 
+    # Retrieval strategy: "dense" (vector only) or "hybrid" (BM25 + dense via RRF).
+    retrieval_mode: str = "dense"
+    fetch_k: int = 12  # candidates pulled per source before fusion/reranking
+    use_reranker: bool = False
+    rerank_model: str = "Xenova/ms-marco-MiniLM-L-6-v2"
+
     @property
     def api_key_or_none(self) -> str | None:
         return self.anthropic_api_key or None

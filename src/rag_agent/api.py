@@ -3,9 +3,12 @@
 Run with:  uv run uvicorn rag_agent.api:app --reload
 """
 
+import json
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from rag_agent.config import get_settings
@@ -51,3 +54,40 @@ async def ask(request: AskRequest) -> AskResponse:
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY is not configured on the server.")
     state = await app.state.graph.ainvoke(initial_state(request.question))
     return AskResponse(answer=state["answer"], sources=state["sources"], rewrites=state["rewrites"])
+
+
+def _sse(data: dict) -> str:
+    """Format a Server-Sent Events data frame."""
+    return f"data: {json.dumps(data)}\n\n"
+
+
+async def event_stream(graph, question: str) -> AsyncIterator[str]:
+    """Stream the final answer token-by-token, then a closing frame with sources.
+
+    Uses LangGraph's multi-mode streaming: `messages` carries per-token LLM output
+    (filtered to the `generate` node so grading/rewrite tokens aren't leaked), and
+    `updates` carries node state deltas, from which we pick up the final sources.
+    """
+    sources: list[str] = []
+    async for mode, payload in graph.astream(initial_state(question), stream_mode=["updates", "messages"]):
+        if mode == "messages":
+            chunk, metadata = payload
+            if metadata.get("langgraph_node") == "generate":
+                text = getattr(chunk, "text", "") or ""
+                if text:
+                    yield _sse({"token": text})
+        elif mode == "updates":
+            update = payload.get("generate") or {}
+            if update.get("sources"):
+                sources = update["sources"]
+    yield _sse({"done": True, "sources": sources})
+
+
+@app.post("/ask/stream")
+async def ask_stream(request: AskRequest) -> StreamingResponse:
+    if not get_settings().anthropic_api_key:
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY is not configured on the server.")
+    return StreamingResponse(
+        event_stream(app.state.graph, request.question),
+        media_type="text/event-stream",
+    )
