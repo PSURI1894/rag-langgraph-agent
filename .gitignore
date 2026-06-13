@@ -1,0 +1,14 @@
+# Environments & secrets
+.env
+.venv/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local data (raw docs clone + vector store) — rebuilt by `uv run python -m rag_agent.ingest`
+data/
+
+# Per-run eval artifacts (committed snapshot lives in the README)
+evals/results/
